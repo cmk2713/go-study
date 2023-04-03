@@ -118,6 +118,24 @@ func main(){
 
 ### 기본 사용법
 
+**parameter**
+
+```go
+func SendOnly(array []int, ch chan <- int){
+	for _, val := range array {
+		total += val
+	}
+	ch <- total
+}
+
+func ReceiveOnly(inCh <-chan int) {
+	for val := range inCh {
+		fmt.Printf("%d", val)
+	}
+}
+
+```
+
 **notification / timeout**
 
 ```go
@@ -293,66 +311,61 @@ func (u *user) listen() {
 - 할당할 워커의 수를 조정해 작업하도록 구현
 
 ```go
-package fetcher
+func readSomething() <-chan string {
+    outCh := make(chan string)
 
-import (
-	"io"
-)
+    go func() {
+        defer close(outCh)
 
-type MultiFetcher struct {
-	*fetcher
-	workers int
+        for i := 0; i < 1000; i++ {
+            // 파일 읽기 대신에 Sleep
+            time.Sleep(time.Duration(rand.Intn(5)) * time.Millisecond)
+            outCh <- fmt.Sprintf("line:%d", i)
+        }
+    }()
+
+    return outCh
 }
 
-func Multi(writer io.Writer, amount int) *MultiFetcher {
-	return &MultiFetcher{fetcher: Simple(writer), workers: amount}
+func fetchSomething(inCh <-chan string) <-chan string {
+    outChCh := make(chan chan string, 10)
+
+    go func() {
+        defer close(outChCh)
+
+        for line := range inCh {
+            outCh := make(chan string)
+            outChCh <- outCh
+
+            go func(line string) {
+                // 페치하는 대신에 Sleep
+                time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
+                outCh <- fmt.Sprintf("%s ... fetched!", line)
+            }(line)
+        }
+    }()
+
+    // chan chan을 이대로 후속 처리에 넘겨도 좋지만 여기에서는 chan으로 변환해 둔다
+    outCh := make(chan string)
+    go func() {
+        defer close(outCh)
+
+        for ch := range outChCh {
+            outCh <- <-ch
+        }
+    }()
+
+    return outCh
 }
 
-func (m *MultiFetcher) Run() {
+func main() {
+    start := time.Now()
 
-	readCh := make(chan string)
-	fetchCh := make(chan chan string, m.workers)
-	distributeCh := make(chan string)
+    for line := range fetchSomething(readSomething()) {
+        fmt.Println(line)
+    }
 
-	
-	go m.read(readCh)
-	go m.fetch(readCh, fetchCh)
-	go m.distribute(fetchCh, distributeCh)
-	m.print(distributeCh)
-
-}
-
-func (M *MultiFetcher) read(outCh chan<- string){
-	defer close(outCh)
-	for i := 0; i < 1000; i ++ {
-		time.Sleep(time.Duration(rand.Intn(5)) * time.Millisecond)
-		outCh <- fmt.Sprintf("line: %d", i+1)
-	}
-}
-
-func (m *MultiFetcher) fetch(inCh <-chan string, outChCh chan<- chan string) {
-
-	defer close(outChCh)
-
-	for line := range inCh {
-
-		outCh := make(chan string)
-
-		go m.fetchLine(line, outCh)
-		outChCh <- outCh
-	}
-}
-
-func (m *MultiFetcher) distribute(inCh <-chan chan string, outCh chan<- string) {
-	defer close(outCh)
-	for ch := range inCh {
-		outCh <- <- ch
-	}
-}
-
-func (m *MultiFetcher) fetchLine(line string, outCh chan<- string) {
-	defer close(outCh)
-	m.fetcher.fetchLine(line, outCh) // outCh <- line
+    fmt.Println("done", time.Now().Sub(start))
 }
 ```
 
